@@ -176,7 +176,7 @@
 
         const updateBoard = async (index, marker) => {
             if (!db || !gameId || selectedCell === null) return;
-            const gameDocRef = doc(db, `games/${gameId}`);
+            const gameDocRef = doc(db, `artifacts/${appId}/public/data/games/${gameId}`);
             
             try {
                 await runTransaction(db, async (transaction) => {
@@ -242,7 +242,7 @@
                 return;
             }
             const newGameId = crypto.randomUUID().slice(0, 6);
-            const gameDocRef = doc(db, `games/${newGameId}`);
+            const gameDocRef = doc(db, `artifacts/${appId}/public/data/games/${newGameId}`);
             const initialBoard = Array(9).fill(null);
             const players = { [userId]: 'X' };
             try {
@@ -271,7 +271,7 @@
                 return;
             }
             gameId = inputGameId;
-            const gameDocRef = doc(db, `games/${gameId}`);
+            const gameDocRef = doc(db, `artifacts/${appId}/public/data/games/${gameId}`);
 
             try {
                 await runTransaction(db, async (transaction) => {
@@ -312,7 +312,7 @@
         
         const resetGame = async () => {
             if (!db || !gameId) return;
-            const gameDocRef = doc(db, `games/${gameId}`);
+            const gameDocRef = doc(db, `artifacts/${appId}/public/data/games/${gameId}`);
             try {
                 await setDoc(gameDocRef, {
                     board: Array(9).fill(null),
@@ -352,7 +352,7 @@
                         return;
                     }
 
-                    const gameDocRef = doc(db, `games/${gameId}`);
+                    const gameDocRef = doc(db, `artifacts/${appId}/public/data/games/${gameId}`);
                     onSnapshot(gameDocRef, (docSnap) => {
                         if (docSnap.exists()) {
                             const gameData = docSnap.data();
