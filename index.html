@@ -81,9 +81,18 @@
         import { getFirestore, doc, setDoc, onSnapshot, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
         // قم بتعريف متغيرات Firebase العامة (مقدمة من البيئة).
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        // هذه المعلومات يجب أن تكون خاصة بمشروعك في Firebase
+        const firebaseConfig = {
+            apiKey: "AIzaSyCvWZsTZrMioV2ODpN0KqYimcFhHXmSiIE",
+            authDomain: "speakright-skjwg.firebaseapp.com",
+            databaseURL: "https://speakright-skjwg-default-rtdb.firebaseio.com",
+            projectId: "speakright-skjwg",
+            storageBucket: "speakright-skjwg.firebasestorage.app",
+            messagingSenderId: "81615484560",
+            appId: "1:81615484560:web:7f7d1922b2917c541aca15"
+        };
+        const appId = firebaseConfig.appId;
+        const initialAuthToken = null; // لم يعد هذا مطلوبًا
         
         // واجهات المستخدم
         const messageEl = document.getElementById('message');
@@ -167,7 +176,7 @@
 
         const updateBoard = async (index, marker) => {
             if (!db || !gameId || selectedCell === null) return;
-            const gameDocRef = doc(db, `artifacts/${appId}/public/data/games/${gameId}`);
+            const gameDocRef = doc(db, `games/${gameId}`);
             
             try {
                 await runTransaction(db, async (transaction) => {
@@ -233,7 +242,7 @@
                 return;
             }
             const newGameId = crypto.randomUUID().slice(0, 6);
-            const gameDocRef = doc(db, `artifacts/${appId}/public/data/games/${newGameId}`);
+            const gameDocRef = doc(db, `games/${newGameId}`);
             const initialBoard = Array(9).fill(null);
             const players = { [userId]: 'X' };
             try {
@@ -262,7 +271,7 @@
                 return;
             }
             gameId = inputGameId;
-            const gameDocRef = doc(db, `artifacts/${appId}/public/data/games/${gameId}`);
+            const gameDocRef = doc(db, `games/${gameId}`);
 
             try {
                 await runTransaction(db, async (transaction) => {
@@ -278,6 +287,12 @@
                     }
 
                     if (playerIds.includes(userId)) {
+                        // Player is already in the game, no need to add again
+                        isGameReady = true;
+                        playerMarker = playerIds[0] === userId ? 'X' : 'O';
+                        messageEl.innerText = `أنت بالفعل في اللعبة! أنت اللاعب ${playerMarker}.`;
+                        displayGameIdEl.innerText = gameId;
+                        updateUI();
                         return;
                     }
 
@@ -297,7 +312,7 @@
         
         const resetGame = async () => {
             if (!db || !gameId) return;
-            const gameDocRef = doc(db, `artifacts/${appId}/public/data/games/${gameId}`);
+            const gameDocRef = doc(db, `games/${gameId}`);
             try {
                 await setDoc(gameDocRef, {
                     board: Array(9).fill(null),
@@ -323,14 +338,10 @@
                         isAuthReady = true;
                         displayUserIdEl.innerText = userId;
                     } else {
-                        if (initialAuthToken) {
-                            signInWithCustomToken(auth, initialAuthToken).catch(err => {
-                                console.error("خطأ في تسجيل الدخول الرمزي:", err);
-                                signInAnonymously(auth);
+                         signInAnonymously(auth).catch(err => {
+                                console.error("خطأ في تسجيل الدخول المجهول:", err);
+                                messageEl.innerText = "فشل تسجيل الدخول. يرجى المحاولة مرة أخرى.";
                             });
-                        } else {
-                            signInAnonymously(auth);
-                        }
                     }
                 });
 
@@ -341,7 +352,7 @@
                         return;
                     }
 
-                    const gameDocRef = doc(db, `artifacts/${appId}/public/data/games/${gameId}`);
+                    const gameDocRef = doc(db, `games/${gameId}`);
                     onSnapshot(gameDocRef, (docSnap) => {
                         if (docSnap.exists()) {
                             const gameData = docSnap.data();
