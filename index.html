@@ -1,375 +1,398 @@
-import React, { useState, useEffect } from 'react';
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, setDoc, onSnapshot, runTransaction } from 'firebase/firestore';
-
-// قم بتعريف متغيرات Firebase العامة (مقدمة من البيئة).
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
-// قائمة بالأسئلة والإجابات
-const questions = [
-  {
-    question: "ما هو أكبر كوكب في المجموعة الشمسية؟",
-    options: ["المريخ", "المشتري", "زحل"],
-    answer: "المشتري"
-  },
-  {
-    question: "من هو مؤلف رواية 'مئة عام من العزلة'؟",
-    options: ["خورخي لويس بورخيس", "باولو كويلو", "غابرييل غارسيا ماركيز"],
-    answer: "غابرييل غارسيا ماركيز"
-  },
-  {
-    question: "ما هي عاصمة أستراليا؟",
-    options: ["سيدني", "ملبورن", "كانبرا"],
-    answer: "كانبرا"
-  },
-  {
-    question: "ما هو العنصر الكيميائي الذي يرمز له بالرمز 'Au'؟",
-    options: ["الفضة", "الذهب", "النحاس"],
-    answer: "الذهب"
-  },
-  {
-    question: "كم عدد ألوان قوس قزح؟",
-    options: ["6", "7", "8"],
-    answer: "7"
-  }
-];
-
-// دالة لجلب سؤال عشوائي
-const getRandomQuestion = () => {
-  const randomIndex = Math.floor(Math.random() * questions.length);
-  return questions[randomIndex];
-};
-
-const App = () => {
-  const [db, setDb] = useState(null);
-  const [auth, setAuth] = useState(null);
-  const [userId, setUserId] = useState(null);
-  const [gameId, setGameId] = useState('');
-  const [isAuthReady, setIsAuthReady] = useState(false);
-  const [isGameReady, setIsGameReady] = useState(false);
-  const [playerMarker, setPlayerMarker] = useState(null);
-  const [board, setBoard] = useState(Array(9).fill(null));
-  const [turn, setTurn] = useState('X');
-  const [question, setQuestion] = useState(null);
-  const [selectedCell, setSelectedCell] = useState(null);
-  const [message, setMessage] = useState('');
-
-  // تهيئة Firebase والتحقق من حالة المصادقة
-  useEffect(() => {
-    try {
-      const app = initializeApp(firebaseConfig);
-      const firestore = getFirestore(app);
-      const authService = getAuth(app);
-      setDb(firestore);
-      setAuth(authService);
-
-      // الاستماع لتغييرات حالة المصادقة باستخدام onAuthStateChanged
-      if (authService) {
-        onAuthStateChanged(authService, (user) => {
-          if (user) {
-            setUserId(user.uid);
-            setIsAuthReady(true);
-          } else {
-            // في حالة عدم وجود مستخدم، قم بتسجيل الدخول
-            if (initialAuthToken) {
-              signInWithCustomToken(authService, initialAuthToken).catch(err => {
-                console.error("خطأ في تسجيل الدخول الرمزي:", err);
-                signInAnonymously(authService).then(() => {
-                    setMessage("تم تسجيل الدخول كمستخدم مجهول. يمكنك الآن اللعب.");
-                });
-              });
-            } else {
-              signInAnonymously(authService).then(() => {
-                  setMessage("تم تسجيل الدخول كمستخدم مجهول. يمكنك الآن اللعب.");
-              });
-            }
-          }
-        });
-      }
-    } catch (error) {
-      console.error("خطأ في تهيئة Firebase:", error);
-      setMessage("حدث خطأ في تهيئة اللعبة. يرجى المحاولة مرة أخرى.");
-    }
-  }, []);
-
-  // الاستماع لتغييرات اللعبة في Firestore
-  useEffect(() => {
-    if (!db || !isAuthReady || !gameId) return;
-
-    const gameDocRef = doc(db, `artifacts/${appId}/public/data/games/${gameId}`);
-
-    const unsubscribe = onSnapshot(gameDocRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const gameData = docSnap.data();
-        if (gameData.board) {
-          setBoard(gameData.board);
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>لعبة XO المعرفية</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            direction: rtl;
+            font-family: 'Inter', sans-serif;
         }
-        if (gameData.turn) {
-          setTurn(gameData.turn);
+        .rotated-text {
+            writing-mode: vertical-rl;
+            text-orientation: mixed;
+            transform: rotate(180deg);
         }
-        if (gameData.players) {
-          // تحديد الرمز الخاص باللاعب الحالي ('X' أو 'O')
-          const playerIds = Object.keys(gameData.players);
-          if (playerIds.includes(userId)) {
-            const marker = playerIds[0] === userId ? 'X' : 'O';
-            setPlayerMarker(marker);
-            setIsGameReady(true);
-            setMessage(`أنت اللاعب ${marker}. دور ${gameData.turn}.`);
-          } else if (playerIds.length < 2) {
-            setMessage('انتظر لاعبًا آخر للانضمام...');
-          } else {
-             setMessage('هذه الغرفة ممتلئة.');
-          }
-        }
-        
-        // التحقق من الفائز أو التعادل
-        const winner = checkWinner(gameData.board);
-        if (winner) {
-            setMessage(`اللاعب ${winner} هو الفائز!`);
-        } else if (gameData.board.every(cell => cell !== null)) {
-            setMessage("تعادل!");
-        }
+    </style>
+</head>
+<body class="bg-gray-100 p-4">
 
-      } else {
-        setMessage('لم يتم العثور على اللعبة بهذا الرمز. قم بإنشاء واحدة أو تأكد من الرمز.');
-        setIsGameReady(false);
-        setPlayerMarker(null);
-      }
-    });
-
-    return () => unsubscribe();
-  }, [db, isAuthReady, gameId, userId]);
-
-  // دالة لإنشاء لعبة جديدة
-  const createNewGame = async () => {
-    if (!db || !userId) {
-      setMessage("لا يمكن إنشاء اللعبة. يرجى التأكد من الاتصال.");
-      return;
-    }
-    const newGameId = crypto.randomUUID().slice(0, 6);
-    const gameDocRef = doc(db, `artifacts/${appId}/public/data/games/${newGameId}`);
-    const initialBoard = Array(9).fill(null);
-    const players = { [userId]: 'X' }; // اللاعب الأول هو 'X'
-    try {
-      await setDoc(gameDocRef, {
-        board: initialBoard,
-        turn: 'X',
-        players: players
-      });
-      setGameId(newGameId);
-      setPlayerMarker('X');
-      setIsGameReady(true);
-      setMessage(`تم إنشاء اللعبة! شارك هذا الرمز: ${newGameId}`);
-    } catch (e) {
-      console.error("خطأ في إنشاء اللعبة:", e);
-      setMessage("فشل إنشاء اللعبة. حاول مرة أخرى.");
-    }
-  };
-
-  // دالة للانضمام إلى لعبة موجودة
-  const joinGame = async (e) => {
-    e.preventDefault();
-    if (!db || !userId || !gameId) {
-      setMessage("الرمز غير صحيح أو المستخدم غير متصل.");
-      return;
-    }
-    const gameDocRef = doc(db, `artifacts/${appId}/public/data/games/${gameId}`);
-
-    try {
-      await runTransaction(db, async (transaction) => {
-        const gameDoc = await transaction.get(gameDocRef);
-        if (!gameDoc.exists()) {
-          throw "لم يتم العثور على اللعبة.";
-        }
-        const gameData = gameDoc.data();
-        const playerIds = Object.keys(gameData.players);
-
-        if (playerIds.length >= 2) {
-          throw "هذه اللعبة ممتلئة.";
-        }
-
-        if (playerIds.includes(userId)) {
-          // إذا كان اللاعب قد انضم بالفعل، لا تفعل شيئًا
-          return;
-        }
-
-        const newPlayers = { ...gameData.players, [userId]: 'O' };
-        setPlayerMarker('O');
-        setIsGameReady(true);
-        transaction.update(gameDocRef, { players: newPlayers });
-        setMessage(`انضممت إلى اللعبة! أنت اللاعب O.`);
-      });
-    } catch (e) {
-      console.error("خطأ في الانضمام إلى اللعبة:", e);
-      setMessage(`فشل الانضمام: ${e}`);
-    }
-  };
-
-  // دالة للتعامل مع النقر على خلية
-  const handleCellClick = (index) => {
-    if (!isGameReady || board[index] || turn !== playerMarker || checkWinner(board) || board.every(c => c !== null)) {
-      return;
-    }
-    setSelectedCell(index);
-    setQuestion(getRandomQuestion());
-    setMessage(`دورك! أجب على السؤال لوضع علامة ${playerMarker}.`);
-  };
-
-  // دالة للتحقق من الإجابة
-  const handleAnswer = async (selectedOption) => {
-    if (!question || selectedCell === null) return;
-    
-    if (selectedOption === question.answer) {
-      setMessage("إجابة صحيحة! قم بوضع علامتك.");
-      await updateBoard(selectedCell, playerMarker);
-    } else {
-      setMessage("إجابة خاطئة. فقدت دورك.");
-      await updateBoard(selectedCell, null);
-    }
-    setQuestion(null);
-    setSelectedCell(null);
-  };
-
-  // دالة لتحديث اللوحة وإخبار اللاعب الآخر
-  const updateBoard = async (index, marker) => {
-    if (!db || !gameId || selectedCell === null) return;
-    const gameDocRef = doc(db, `artifacts/${appId}/public/data/games/${gameId}`);
-
-    await runTransaction(db, async (transaction) => {
-      const gameDoc = await transaction.get(gameDocRef);
-      if (!gameDoc.exists()) return;
-      
-      const gameData = gameDoc.data();
-      const newBoard = [...gameData.board];
-      if (marker) {
-          newBoard[index] = marker;
-      }
-      
-      const nextTurn = turn === 'X' ? 'O' : 'X';
-      transaction.update(gameDocRef, {
-        board: newBoard,
-        turn: nextTurn
-      });
-    });
-  };
-
-  // دالة للتحقق من الفائز
-  const checkWinner = (currentBoard) => {
-    const lines = [
-      [0, 1, 2], [3, 4, 5], [6, 7, 8],
-      [0, 3, 6], [1, 4, 7], [2, 5, 8],
-      [0, 4, 8], [2, 4, 6]
-    ];
-    for (let i = 0; i < lines.length; i++) {
-      const [a, b, c] = lines[i];
-      if (currentBoard[a] && currentBoard[a] === currentBoard[b] && currentBoard[a] === currentBoard[c]) {
-        return currentBoard[a];
-      }
-    }
-    return null;
-  };
-
-  const resetGame = async () => {
-    if (!db || !gameId) return;
-    const gameDocRef = doc(db, `artifacts/${appId}/public/data/games/${gameId}`);
-    try {
-      await setDoc(gameDocRef, {
-        board: Array(9).fill(null),
-        turn: 'X',
-        players: { [userId]: playerMarker } // الاحتفاظ باللاعب الحالي فقط
-      });
-      setMessage("تم إعادة اللعبة.");
-    } catch (e) {
-      console.error("خطأ في إعادة ضبط اللعبة:", e);
-    }
-  };
-
-  return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100 p-4">
-      <div className="bg-white p-6 rounded-3xl shadow-2xl w-full max-w-xl text-center">
-        <h1 className="text-4xl font-extrabold text-blue-600 mb-4">لعبة XO المعرفية</h1>
-        
-        {!isGameReady ? (
-          <div className="flex flex-col items-center space-y-4">
-            <h2 className="text-2xl font-bold text-gray-700">العب عبر الإنترنت</h2>
-            <button
-              onClick={createNewGame}
-              className="px-6 py-3 bg-green-500 text-white font-bold rounded-full shadow-lg hover:bg-green-600 transition-colors"
-            >
-              إنشاء لعبة جديدة
-            </button>
-            <div className="flex items-center space-x-2">
-                <span className="text-gray-500">أو</span>
-            </div>
-            <form onSubmit={joinGame} className="flex flex-col space-y-2 w-full">
-              <input
-                type="text"
-                value={gameId}
-                onChange={(e) => setGameId(e.target.value)}
-                placeholder="أدخل رمز اللعبة"
-                className="p-3 border rounded-lg text-center font-mono"
-              />
-              <button
-                type="submit"
-                className="px-6 py-3 bg-blue-500 text-white font-bold rounded-full shadow-lg hover:bg-blue-600 transition-colors"
-              >
-                الانضمام إلى لعبة
-              </button>
-            </form>
-          </div>
-        ) : (
-          <div className="space-y-6">
-            <p className="text-xl font-semibold text-gray-800">{message}</p>
-            <p className="text-sm text-gray-500">رمز اللعبة: <span className="font-bold text-blue-600">{gameId}</span></p>
-            <p className="text-sm text-gray-500">معرف المستخدم: <span className="font-bold text-blue-600">{userId}</span></p>
-
-            <div className="grid grid-cols-3 gap-2">
-              {board.map((cell, index) => (
-                <button
-                  key={index}
-                  className={`
-                    w-28 h-28 sm:w-32 sm:h-32 text-5xl font-extrabold rounded-lg shadow-inner transition-colors duration-200
-                    ${cell ? 'cursor-not-allowed' : (turn === playerMarker ? 'bg-gray-200 hover:bg-gray-300' : 'bg-gray-100 cursor-not-allowed')}
-                    ${cell === 'X' ? 'text-red-500' : (cell === 'O' ? 'text-blue-500' : 'text-gray-400')}
-                  `}
-                  onClick={() => handleCellClick(index)}
-                  disabled={cell || turn !== playerMarker}
-                >
-                  {cell}
-                </button>
-              ))}
-            </div>
+    <div id="app" class="flex flex-col items-center justify-center min-h-screen">
+        <div class="bg-white p-6 rounded-3xl shadow-2xl w-full max-w-xl text-center">
+            <h1 class="text-4xl font-extrabold text-blue-600 mb-4">لعبة XO المعرفية</h1>
             
-            {question && (
-              <div className="bg-blue-50 rounded-xl p-4 shadow-inner">
-                <h3 className="text-xl font-bold mb-3">{question.question}</h3>
-                <div className="flex flex-col space-y-2">
-                  {question.options.map((option, index) => (
-                    <button
-                      key={index}
-                      className="px-4 py-2 bg-blue-400 text-white font-bold rounded-full hover:bg-blue-500 transition-colors"
-                      onClick={() => handleAnswer(option)}
-                    >
-                      {option}
+            <div id="game-container" class="space-y-6">
+                <!-- هذا الجزء سيتم تعديله بواسطة JavaScript -->
+                <p id="message" class="text-xl font-semibold text-gray-800"></p>
+                
+                <div id="initial-screen" class="flex flex-col items-center space-y-4">
+                    <h2 class="text-2xl font-bold text-gray-700">العب عبر الإنترنت</h2>
+                    <button id="create-game-btn" class="px-6 py-3 bg-green-500 text-white font-bold rounded-full shadow-lg hover:bg-green-600 transition-colors">
+                        إنشاء لعبة جديدة
                     </button>
-                  ))}
+                    <div class="flex items-center space-x-2">
+                        <span class="text-gray-500">أو</span>
+                    </div>
+                    <form id="join-game-form" class="flex flex-col space-y-2 w-full">
+                        <input
+                            type="text"
+                            id="game-id-input"
+                            placeholder="أدخل رمز اللعبة"
+                            class="p-3 border rounded-lg text-center font-mono"
+                        />
+                        <button
+                            type="submit"
+                            class="px-6 py-3 bg-blue-500 text-white font-bold rounded-full shadow-lg hover:bg-blue-600 transition-colors"
+                        >
+                            الانضمام إلى لعبة
+                        </button>
+                    </form>
                 </div>
-              </div>
-            )}
-            <button
-              onClick={resetGame}
-              className="mt-4 px-6 py-3 bg-red-500 text-white font-bold rounded-full shadow-lg hover:bg-red-600 transition-colors"
-            >
-              إعادة اللعبة
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-};
 
-export default App;
+                <div id="game-board-container" class="hidden">
+                    <p class="text-sm text-gray-500">رمز اللعبة: <span id="display-game-id" class="font-bold text-blue-600"></span></p>
+                    <p class="text-sm text-gray-500">معرف المستخدم: <span id="display-user-id" class="font-bold text-blue-600"></span></p>
+                    
+                    <div id="board" class="grid grid-cols-3 gap-2">
+                        <!-- الخلايا سيتم إنشاؤها بواسطة JavaScript -->
+                    </div>
+                    
+                    <div id="question-box" class="hidden bg-blue-50 rounded-xl p-4 shadow-inner mt-4">
+                        <h3 id="question-text" class="text-xl font-bold mb-3"></h3>
+                        <div id="options-container" class="flex flex-col space-y-2">
+                            <!-- الأزرار سيتم إنشاؤها بواسطة JavaScript -->
+                        </div>
+                    </div>
+                    
+                    <button id="reset-game-btn" class="mt-4 px-6 py-3 bg-red-500 text-white font-bold rounded-full shadow-lg hover:bg-red-600 transition-colors">
+                        إعادة اللعبة
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+        import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+        // قم بتعريف متغيرات Firebase العامة (مقدمة من البيئة).
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        
+        // واجهات المستخدم
+        const messageEl = document.getElementById('message');
+        const initialScreenEl = document.getElementById('initial-screen');
+        const gameBoardContainerEl = document.getElementById('game-board-container');
+        const createGameBtn = document.getElementById('create-game-btn');
+        const joinGameForm = document.getElementById('join-game-form');
+        const gameIdInput = document.getElementById('game-id-input');
+        const displayGameIdEl = document.getElementById('display-game-id');
+        const displayUserIdEl = document.getElementById('display-user-id');
+        const boardEl = document.getElementById('board');
+        const questionBoxEl = document.getElementById('question-box');
+        const questionTextEl = document.getElementById('question-text');
+        const optionsContainerEl = document.getElementById('options-container');
+        const resetGameBtn = document.getElementById('reset-game-btn');
+
+        let db, auth, userId = null;
+        let gameId = '';
+        let isAuthReady = false;
+        let isGameReady = false;
+        let playerMarker = null;
+        let board = Array(9).fill(null);
+        let turn = 'X';
+        let question = null;
+        let selectedCell = null;
+
+        // قائمة الأسئلة (يمكن نقلها إلى قاعدة البيانات لاحقًا)
+        const questions = [
+            { question: "ما هو أكبر كوكب في المجموعة الشمسية؟", options: ["المريخ", "المشتري", "زحل"], answer: "المشتري" },
+            { question: "من هو مؤلف رواية 'مئة عام من العزلة'؟", options: ["خورخي لويس بورخيس", "باولو كويلو", "غابرييل غارسيا ماركيز"], answer: "غابرييل غارسيا ماركيز" },
+            { question: "ما هي عاصمة أستراليا؟", options: ["سيدني", "ملبورن", "كانبرا"], answer: "كانبرا" },
+            { question: "ما هو العنصر الكيميائي الذي يرمز له بالرمز 'Au'؟", options: ["الفضة", "الذهب", "النحاس"], answer: "الذهب" },
+            { question: "كم عدد ألوان قوس قزح؟", options: ["6", "7", "8"], answer: "7" }
+        ];
+
+        const getRandomQuestion = () => {
+            const randomIndex = Math.floor(Math.random() * questions.length);
+            return questions[randomIndex];
+        };
+
+        const updateUI = () => {
+            if (isGameReady) {
+                initialScreenEl.classList.add('hidden');
+                gameBoardContainerEl.classList.remove('hidden');
+            } else {
+                initialScreenEl.classList.remove('hidden');
+                gameBoardContainerEl.classList.add('hidden');
+            }
+        };
+
+        const setBoard = (newBoard) => {
+            board = newBoard;
+            boardEl.innerHTML = '';
+            board.forEach((cell, index) => {
+                const cellBtn = document.createElement('button');
+                cellBtn.className = `w-28 h-28 sm:w-32 sm:h-32 text-5xl font-extrabold rounded-lg shadow-inner transition-colors duration-200 ${
+                    cell ? 'cursor-not-allowed' : (turn === playerMarker ? 'bg-gray-200 hover:bg-gray-300' : 'bg-gray-100 cursor-not-allowed')
+                } ${
+                    cell === 'X' ? 'text-red-500' : (cell === 'O' ? 'text-blue-500' : 'text-gray-400')
+                }`;
+                cellBtn.innerText = cell || '';
+                cellBtn.onclick = () => handleCellClick(index);
+                boardEl.appendChild(cellBtn);
+            });
+        };
+
+        const checkWinner = (currentBoard) => {
+            const lines = [
+                [0, 1, 2], [3, 4, 5], [6, 7, 8],
+                [0, 3, 6], [1, 4, 7], [2, 5, 8],
+                [0, 4, 8], [2, 4, 6]
+            ];
+            for (let i = 0; i < lines.length; i++) {
+                const [a, b, c] = lines[i];
+                if (currentBoard[a] && currentBoard[a] === currentBoard[b] && currentBoard[a] === currentBoard[c]) {
+                    return currentBoard[a];
+                }
+            }
+            return null;
+        };
+
+        const updateBoard = async (index, marker) => {
+            if (!db || !gameId || selectedCell === null) return;
+            const gameDocRef = doc(db, `artifacts/${appId}/public/data/games/${gameId}`);
+            
+            try {
+                await runTransaction(db, async (transaction) => {
+                    const gameDoc = await transaction.get(gameDocRef);
+                    if (!gameDoc.exists()) return;
+                    
+                    const gameData = gameDoc.data();
+                    const newBoard = [...gameData.board];
+                    if (marker) {
+                        newBoard[index] = marker;
+                    }
+                    
+                    const nextTurn = gameData.turn === 'X' ? 'O' : 'X';
+                    transaction.update(gameDocRef, {
+                        board: newBoard,
+                        turn: nextTurn
+                    });
+                });
+            } catch (e) {
+                console.error("خطأ في تحديث اللوحة:", e);
+                messageEl.innerText = `فشل تحديث اللوحة: ${e.message}`;
+            }
+        };
+
+        const handleCellClick = (index) => {
+            if (!isGameReady || board[index] || turn !== playerMarker || checkWinner(board) || board.every(c => c !== null)) {
+                return;
+            }
+            selectedCell = index;
+            question = getRandomQuestion();
+            messageEl.innerText = `دورك! أجب على السؤال لوضع علامة ${playerMarker}.`;
+            
+            questionBoxEl.classList.remove('hidden');
+            questionTextEl.innerText = question.question;
+            optionsContainerEl.innerHTML = '';
+            question.options.forEach((option) => {
+                const optionBtn = document.createElement('button');
+                optionBtn.className = "px-4 py-2 bg-blue-400 text-white font-bold rounded-full hover:bg-blue-500 transition-colors";
+                optionBtn.innerText = option;
+                optionBtn.onclick = () => handleAnswer(option);
+                optionsContainerEl.appendChild(optionBtn);
+            });
+        };
+
+        const handleAnswer = async (selectedOption) => {
+            if (!question || selectedCell === null) return;
+            questionBoxEl.classList.add('hidden');
+
+            if (selectedOption === question.answer) {
+                messageEl.innerText = "إجابة صحيحة! قم بوضع علامتك.";
+                await updateBoard(selectedCell, playerMarker);
+            } else {
+                messageEl.innerText = "إجابة خاطئة. فقدت دورك.";
+                await updateBoard(selectedCell, null);
+            }
+            question = null;
+            selectedCell = null;
+        };
+
+        const createNewGame = async () => {
+            if (!db || !userId) {
+                messageEl.innerText = "لا يمكن إنشاء اللعبة. يرجى التأكد من الاتصال.";
+                return;
+            }
+            const newGameId = crypto.randomUUID().slice(0, 6);
+            const gameDocRef = doc(db, `artifacts/${appId}/public/data/games/${newGameId}`);
+            const initialBoard = Array(9).fill(null);
+            const players = { [userId]: 'X' };
+            try {
+                await setDoc(gameDocRef, {
+                    board: initialBoard,
+                    turn: 'X',
+                    players: players
+                });
+                gameId = newGameId;
+                playerMarker = 'X';
+                isGameReady = true;
+                messageEl.innerText = `تم إنشاء اللعبة! شارك هذا الرمز: ${newGameId}`;
+                displayGameIdEl.innerText = newGameId;
+                updateUI();
+            } catch (e) {
+                console.error("خطأ في إنشاء اللعبة:", e);
+                messageEl.innerText = "فشل إنشاء اللعبة. حاول مرة أخرى.";
+            }
+        };
+
+        const joinGame = async (e) => {
+            e.preventDefault();
+            const inputGameId = gameIdInput.value.trim();
+            if (!db || !userId || !inputGameId) {
+                messageEl.innerText = "الرمز غير صحيح أو المستخدم غير متصل.";
+                return;
+            }
+            gameId = inputGameId;
+            const gameDocRef = doc(db, `artifacts/${appId}/public/data/games/${gameId}`);
+
+            try {
+                await runTransaction(db, async (transaction) => {
+                    const gameDoc = await transaction.get(gameDocRef);
+                    if (!gameDoc.exists()) {
+                        throw new Error("لم يتم العثور على اللعبة.");
+                    }
+                    const gameData = gameDoc.data();
+                    const playerIds = Object.keys(gameData.players);
+
+                    if (playerIds.length >= 2) {
+                        throw new Error("هذه اللعبة ممتلئة.");
+                    }
+
+                    if (playerIds.includes(userId)) {
+                        return;
+                    }
+
+                    const newPlayers = { ...gameData.players, [userId]: 'O' };
+                    playerMarker = 'O';
+                    isGameReady = true;
+                    transaction.update(gameDocRef, { players: newPlayers });
+                    messageEl.innerText = `انضممت إلى اللعبة! أنت اللاعب O.`;
+                    displayGameIdEl.innerText = gameId;
+                    updateUI();
+                });
+            } catch (e) {
+                console.error("خطأ في الانضمام إلى اللعبة:", e);
+                messageEl.innerText = `فشل الانضمام: ${e.message}`;
+            }
+        };
+        
+        const resetGame = async () => {
+            if (!db || !gameId) return;
+            const gameDocRef = doc(db, `artifacts/${appId}/public/data/games/${gameId}`);
+            try {
+                await setDoc(gameDocRef, {
+                    board: Array(9).fill(null),
+                    turn: 'X',
+                    players: { [userId]: playerMarker } // الاحتفاظ باللاعب الحالي فقط
+                });
+                messageEl.innerText = "تم إعادة اللعبة.";
+            } catch (e) {
+                console.error("خطأ في إعادة ضبط اللعبة:", e);
+            }
+        };
+
+        // تهيئة Firebase عند تحميل الصفحة
+        window.onload = () => {
+            try {
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        isAuthReady = true;
+                        displayUserIdEl.innerText = userId;
+                    } else {
+                        if (initialAuthToken) {
+                            signInWithCustomToken(auth, initialAuthToken).catch(err => {
+                                console.error("خطأ في تسجيل الدخول الرمزي:", err);
+                                signInAnonymously(auth);
+                            });
+                        } else {
+                            signInAnonymously(auth);
+                        }
+                    }
+                });
+
+                // الاستماع لتغييرات اللعبة في Firestore
+                const listenForGameChanges = () => {
+                    if (!db || !isAuthReady || !gameId) {
+                        setTimeout(listenForGameChanges, 500);
+                        return;
+                    }
+
+                    const gameDocRef = doc(db, `artifacts/${appId}/public/data/games/${gameId}`);
+                    onSnapshot(gameDocRef, (docSnap) => {
+                        if (docSnap.exists()) {
+                            const gameData = docSnap.data();
+                            if (gameData.board) {
+                                setBoard(gameData.board);
+                            }
+                            if (gameData.turn) {
+                                turn = gameData.turn;
+                            }
+                            if (gameData.players) {
+                                const playerIds = Object.keys(gameData.players);
+                                if (playerIds.includes(userId)) {
+                                    playerMarker = playerIds[0] === userId ? 'X' : 'O';
+                                    isGameReady = true;
+                                    messageEl.innerText = `أنت اللاعب ${playerMarker}. دور ${gameData.turn}.`;
+                                    updateUI();
+                                } else if (playerIds.length < 2) {
+                                    messageEl.innerText = 'انتظر لاعبًا آخر للانضمام...';
+                                } else {
+                                    messageEl.innerText = 'هذه الغرفة ممتلئة.';
+                                }
+                            }
+                            
+                            const winner = checkWinner(gameData.board);
+                            if (winner) {
+                                messageEl.innerText = `اللاعب ${winner} هو الفائز!`;
+                            } else if (gameData.board.every(cell => cell !== null)) {
+                                messageEl.innerText = "تعادل!";
+                            }
+                        } else {
+                            messageEl.innerText = 'لم يتم العثور على اللعبة بهذا الرمز. قم بإنشاء واحدة أو تأكد من الرمز.';
+                            isGameReady = false;
+                            playerMarker = null;
+                            updateUI();
+                        }
+                    });
+                };
+
+                // ربط الأحداث
+                createGameBtn.onclick = createNewGame;
+                joinGameForm.onsubmit = joinGame;
+                resetGameBtn.onclick = resetGame;
+
+                listenForGameChanges();
+
+            } catch (error) {
+                console.error("خطأ في تهيئة Firebase:", error);
+                messageEl.innerText = "حدث خطأ في تهيئة اللعبة. يرجى المحاولة مرة أخرى.";
+            }
+        };
+
+    </script>
+</body>
+</html>
